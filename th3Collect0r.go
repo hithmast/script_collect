@@ -5,15 +5,15 @@ import (
 	"bytes"
 	"fmt"
 	"html"
+	"io/ioutil"
 	"log"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
-	"net"
-	"net/http"
-	"io/ioutil"
 )
 
 const toolVersion = "v1.0.1"
@@ -24,7 +24,7 @@ func main() {
 	// Print tool version and ASCII art
 	fmt.Printf("       Th3 Collect0r %s \n", toolVersion)
 	fmt.Printf("By : Mohamed Ashraf & Ali Emara\n")
-	fmt.Printf("Don't forget to include fuzzing-template/ directory in %s \n", exec.Command("echo $HOME/nuclei-templates"))
+	fmt.Printf("Don't forget to include fuzzing-template/ directory in %s \n", os.Getenv("HOME")+"/nuclei-templates")
 	printASCIIArt()
 
 	// Parse command-line arguments
@@ -191,57 +191,57 @@ func printFullUsage() {
 	fmt.Println("")
 	fmt.Println("Note: Make sure you have proper authorization to perform security scans on the provided domains.")
 }
-//Find Ip Func
+
+// Find IP Func
 func findRealIPAddress(domain string) error {
-    ips, err := net.LookupHost(domain)
-    if err != nil {
-        return err
-    }
+	ips, err := net.LookupHost(domain)
+	if err != nil {
+		return err
+	}
 
-    realIPAddress := ips[0] // Take the first IP address
-    outputFile := fmt.Sprintf("Results/%s_real_ip.txt", sanitizeFileName(domain))
-    
-    err = os.WriteFile(outputFile, []byte(realIPAddress), 0644)
-    if err != nil {
-        return err
-    }
+	realIPAddress := ips[0] // Take the first IP address
+	outputFile := fmt.Sprintf("Results/%s_real_ip.txt", sanitizeFileName(domain))
 
-    fmt.Printf("Success: Real IP address for %s is %s\n", domain, realIPAddress)
-    return nil
+	err = os.WriteFile(outputFile, []byte(realIPAddress), 0644)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Success: Real IP address for %s is %s\n", domain, realIPAddress)
+	return nil
 }
 
-//SHODAN Func
+// SHODAN Func
 func requestShodanData(ipAddress string) error {
-    apiUrl := fmt.Sprintf("https://internetdb.shodan.io/%s", ipAddress)
-    
-    response, err := http.Get(apiUrl)
-    if err != nil {
-        return err
-    }
-    defer response.Body.Close()
+	apiUrl := fmt.Sprintf("https://internetdb.shodan.io/%s", ipAddress)
 
-    if response.StatusCode != http.StatusOK {
-        return fmt.Errorf("HTTP request to Shodan API failed with status code: %d", response.StatusCode)
-    }
+	response, err := http.Get(apiUrl)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
 
-    data, err := ioutil.ReadAll(response.Body)
-    if err != nil {
-        return err
-    }
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP request to Shodan API failed with status code: %d", response.StatusCode)
+	}
 
-    outputFile := "shodan_results.txt"
-    err = os.WriteFile(outputFile, data, 0644)
-    if err != nil {
-        return err
-    }
+	data, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		return err
+	}
 
-    fmt.Printf("Success: Shodan data for IP %s saved to %s\n", ipAddress, outputFile)
-    return nil
+	outputFile := "shodan_results.txt"
+	err = os.WriteFile(outputFile, data, 0644)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Success: Shodan data for IP %s saved to %s\n", ipAddress, outputFile)
+	return nil
 }
 
-//Parseint func
+// Parseint func
 func parseInt(s string, defaultValue int) int {
-	// ... (Rest of the parseInt function remains the same)
 	value := defaultValue
 	n, err := fmt.Sscanf(s, "%d", &value)
 	if err != nil || n != 1 {
@@ -249,8 +249,8 @@ func parseInt(s string, defaultValue int) int {
 	}
 	return value
 }
+
 func readDomainsFromFile(filePath string) ([]string, error) {
-	// ... (Rest of the readDomainsFromFile function remains the same)
 	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
@@ -312,7 +312,7 @@ func processDomain(domain, customNucleiFlags string, templateNames []string) {
 	// Extract domain name from the URL
 	domainName := strings.TrimPrefix(domain, "http://")
 	domainName = strings.TrimPrefix(domainName, "https://")
-	//Create Result dir
+	// Create Result dir
 	err := os.Mkdir("Results", 0750)
 	if err != nil && !os.IsExist(err) {
 		log.Fatalf("Error creating Results directory: %v", err)
@@ -476,20 +476,20 @@ func processDomain(domain, customNucleiFlags string, templateNames []string) {
 		log.Printf("Error generating HTML report for %s: %v", domain, err)
 	}
 	// Find real IP address and save it to a file
-if err := findRealIPAddress(domain); err != nil {
-    log.Printf("Error finding real IP address: %v", err)
-}
+	if err := findRealIPAddress(domain); err != nil {
+		log.Printf("Error finding real IP address: %v", err)
+	}
 
-// Request Shodan data for the real IP address
-realIPFile := fmt.Sprintf("Results/%s_real_ip.txt", sanitizeFileName(domain))
-realIP, err := os.ReadFile(realIPFile)
-if err != nil {
-    log.Printf("Error reading real IP address file: %v", err)
-} else {
-    if err := requestShodanData(strings.TrimSpace(string(realIP))); err != nil {
-        log.Printf("Error requesting Shodan data: %v", err)
-    }
-}
+	// Request Shodan data for the real IP address
+	realIPFile := fmt.Sprintf("Results/%s_real_ip.txt", sanitizeFileName(domain))
+	realIP, err := os.ReadFile(realIPFile)
+	if err != nil {
+		log.Printf("Error reading real IP address file: %v", err)
+	} else {
+		if err := requestShodanData(strings.TrimSpace(string(realIP))); err != nil {
+			log.Printf("Error requesting Shodan data: %v", err)
+		}
+	}
 
 	fmt.Printf("Done processing %s\n", domainName)
 }
@@ -605,12 +605,12 @@ func generateHTMLReport(domain string, templateNames []string) error {
 		return err
 	}
 
-	fmt.Printf("✨ HTML Report Generated for %s.✨\n", domain)
+	fmt.Printf("HTML report generated: %s\n", reportFileName)
 	return nil
 }
 
 func loadFileContents(filePath string) (string, error) {
-	content, err := os.ReadFile(filePath)
+	content, err := ioutil.ReadFile(filePath)
 	if err != nil {
 		return "", err
 	}
@@ -618,7 +618,7 @@ func loadFileContents(filePath string) (string, error) {
 }
 
 func readOutputFile(filePath string) (string, error) {
-	content, err := os.ReadFile(filePath)
+	content, err := ioutil.ReadFile(filePath)
 	if err != nil {
 		return "", err
 	}
@@ -626,5 +626,5 @@ func readOutputFile(filePath string) (string, error) {
 }
 
 func sanitizeFileName(fileName string) string {
-	return strings.ReplaceAll(fileName, "/", "_")
+	return strings.ReplaceAll(fileName, ".", "_")
 }
