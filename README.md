@@ -1,103 +1,71 @@
-# th3Collect0r
+# Th3 Collect0r
 
-[![GitHub](https://img.shields.io/github/license/hithmast/script_collect)](https://github.com/hithmast/script_collect/blob/th3Collect0r/LICENSE)
+A parallelized recon and fuzzing toolkit for bug bounty and penetration testing, supporting advanced proxy options and robust reporting.
 
-th3Collect0r is a Go program designed to automate the process of scanning a list of domains for security vulnerabilities using various tools. It combines the outputs of waybackurls, katana, gau, and hakrawler, and performs fuzzing scans using custom Nuclei templates to identify potential security issues.
+## Features
 
-## Prerequisites
-
-Before running th3Collect0r, ensure you have the following prerequisites:
-
-1. Go installed on your system (tested with Go 1.16).
-2. The following tools must be installed and available in your PATH:
-   - `waybackurls`
-   - `katana`
-   - `gau`
-   - `hakrawler`
-   - `nuclei`
-
-## Installation
-
-1. Clone this repository to your local machine:
-
-   ```bash
-   git clone https://github.com/hithmast/script_collect.git
-   ```
-
-2. Change into the project directory:
-
-   ```bash
-   cd th3Collect0r
-   ```
-
-3. Build the program:
-
-   ```bash
-   go build th3Collect0r.go
-   ```
+- **Parallel domain processing** for speed
+- **Multiple URL collection tools**: waybackurls, gau, katana, hakrawler
+- **Flexible Nuclei fuzzing** with custom template support
+- **HTML report generation**
+- **Flexible proxy support**:
+  - Single proxy via CLI
+  - Multiple proxies via file, with random selection per request (supports `http`, `https`, `socks4`, `socks5`)
+- **Shodan IP lookup with proxy**
+- **Extensible and robust error handling**
 
 ## Usage
 
-```bash
-./th3Collect0r [OPTIONS] FILE_PATH
+```sh
+go run th3collect0r.go -f domains.txt [OPTIONS]
+go run th3collect0r.go -d example.com [OPTIONS]
 ```
 
-Scan a list of domains for security vulnerabilities using various tools.
+### Options
 
-Options:
+| Option           | Description                                                                                          |
+|------------------|-----------------------------------------------------------------------------------------------------|
+| `-f FILE_PATH`   | Path to the file containing a list of domains to process.                                           |
+| `-d DOMAIN`      | Perform scans on a single target domain.                                                            |
+| `-p PARALLEL`    | Number of domains to process in parallel. Default: 4                                                |
+| `-nf FLAGS`      | Custom Nuclei flags to use for all scans.                                                           |
+| `-t TEMPLATE`    | Specify custom Nuclei templates (repeatable). Default: built-in templates.                          |
+| `-tp PATH`       | Path to custom Nuclei templates. Default: `/fuzzing-templates/`                                     |
+| `-proxy URL`     | Use a (single) proxy for HTTP and tool requests. Supports all types: `http`, `https`, `socks4`, `socks5` |
+| `-proxyfile FILE`| File with a list of proxies (one per line; all types supported; randomized selection per request)   |
+| `-h, --help`     | Print help message and exit.                                                                        |
 
-- `-p PARALLEL`: Number of processes to run in parallel. Default: 4.
-- `-nf FLAGS`: Custom Nuclei flags to use for all scans.
-- `-t TEMPLATE`: Specify the custom Nuclei template for the first scan.
-- `-t TEMPLATE`: Specify the custom Nuclei template for the second scan.
-- `-t TEMPLATE`: Specify the custom Nuclei template for the third scan.
-- `-t TEMPLATE`: Specify the custom Nuclei template for the fourth scan.
-- `-t TEMPLATE`: Specify the custom Nuclei template for the fifth scan.
-- `-s`: Run th3Collect0r in silent mode. No output will be displayed.
-- `-d DOMAIN`: Perform scans on a single target domain.
+**Note:**  
+- If both `-proxy` and `-proxyfile` are set, proxies from the file will be used (randomized per request/tool run).
+- Most CLI tools and HTTP requests will use the selected proxy.  
+- Proxy file example (one per line):  
+  ```
+  http://127.0.0.1:8080
+  socks5://127.0.0.1:9050
+  ```
 
+## Output
+
+- All results and reports are stored in the `Results/` directory and as HTML reports in the current working directory.
+- Shodan results are stored in `shodan_results.txt`.
+
+## Requirements
+
+- Go 1.17+
+- External tools installed and in `$PATH`: `waybackurls`, `gau`, `katana`, `hakrawler`, `nuclei`
+- Nuclei templates in the specified directory
+
+## Example
+
+```sh
+go run th3collect0r.go -f targets.txt -p 5 -proxyfile proxies.txt
 ```
-Keep in mind That all template you picked must be inside ~/nuclei-templates
-```
-## Examples
-
-1. Basic usage with a list of domains in a file:
-
-   ```bash
-   ./th3Collect0r -p 4 domains.txt
-   ```
-
-2. Run th3Collect0r in silent mode:
-
-   ```bash
-   ./th3Collect0r -s -p 4 domains.txt
-   ```
-
-3. Perform scans on a single target domain:
-
-   ```bash
-   ./th3Collect0r -d example.com
-   ```
-
-4. Customize the Nuclei flags and templates:
-
-   ```bash
-   ./th3Collect0r -nf "-sa -rl 50" -t /nuclei-templates/path/to/custom-template.yaml domains.txt -f domains.txt
-   ```
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+MIT
 
-## Disclaimer
+---
 
-th3Collect0r is provided for educational and research purposes only. Use this program responsibly and ensure you have proper authorization to scan the domains.
-
-## Contributions
-
-Contributions are welcome! If you find any issues or have suggestions for improvements, please open an issue or create a pull request.
-
-## Authors
-
-- Mohamed Ashraf - [Elcapitano07x](https://github.com/ElcapitanoO7x)
-- Ali Emara - [Hithmast](https://github.com/hithmast)
+**Disclaimer:**  
+Make sure you have proper authorization to scan the domains you test. This tool is for educational and authorized testing only.
