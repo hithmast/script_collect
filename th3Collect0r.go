@@ -9,32 +9,37 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
+	"math/rand"
 )
 
-const toolVersion = "v1.0.1"
+const toolVersion = "v1.0.2"
 
-var templatesPath = ""
+var (
+	templatesPath = ""
+	proxyURL      = ""
+	proxyList     []string
+)
 
+// Entry point
 func main() {
-	// Print tool version and ASCII art
 	fmt.Printf("       Th3 Collect0r %s \n", toolVersion)
 	fmt.Printf("By : Mohamed Ashraf & Ali Emara\n")
 	fmt.Printf("Don't forget to include fuzzing-template/ directory in %s \n", os.Getenv("HOME")+"/nuclei-templates")
 	printASCIIArt()
 
-	// Parse command-line arguments
 	args := os.Args[1:]
 	if len(args) < 1 {
 		printShortUsage()
 		return
 	}
 
-	// Default values
 	var (
 		filePath          string
 		parallelProcesses = 4
@@ -46,10 +51,9 @@ func main() {
 			"fuzzing-templates/redirect",
 			"fuzzing-templates/ssrf",
 		}
-		domain string // Store the domain if -d option is used
+		domain    string
+		proxyFile string
 	)
-
-	// Process arguments
 	i := 0
 	for i < len(args) {
 		arg := args[i]
@@ -58,7 +62,7 @@ func main() {
 			i++
 			if i < len(args) {
 				domain = args[i]
-				i++ // Move to the next argument
+				i++
 			} else {
 				fmt.Println("Error: Missing domain after -d option")
 				return
@@ -67,7 +71,7 @@ func main() {
 			i++
 			if i < len(args) {
 				parallelProcesses = parseInt(args[i], parallelProcesses)
-				i++ // Move to the next argument
+				i++
 			} else {
 				fmt.Println("Error: Missing value after -p option")
 				return
@@ -76,7 +80,7 @@ func main() {
 			i++
 			if i < len(args) {
 				customNucleiFlags = args[i]
-				i++ // Move to the next argument
+				i++
 			} else {
 				fmt.Println("Error: Missing value after -nf option")
 				return
@@ -85,15 +89,33 @@ func main() {
 			i++
 			for i < len(args) && !strings.HasPrefix(args[i], "-") {
 				templateNames = append(templateNames, args[i])
-				i++ // Move to the next argument
+				i++
 			}
 		case "-f":
 			i++
 			if i < len(args) {
 				filePath = args[i]
-				i++ // Move to the next argument
+				i++
 			} else {
 				fmt.Println("Error: Missing file path after -f option")
+				return
+			}
+		case "-proxy":
+			i++
+			if i < len(args) {
+				proxyURL = args[i]
+				i++
+			} else {
+				fmt.Println("Error: Missing value after -proxy option")
+				return
+			}
+		case "-proxyfile":
+			i++
+			if i < len(args) {
+				proxyFile = args[i]
+				i++
+			} else {
+				fmt.Println("Error: Missing value after -proxyfile option")
 				return
 			}
 		case "-h":
@@ -106,7 +128,7 @@ func main() {
 			i++
 			if i < len(args) {
 				templatesPath = args[i]
-				i++ // Move to the next argument
+				i++
 			} else {
 				fmt.Println("Error: Missing templates path after -tp option")
 				return
@@ -117,25 +139,26 @@ func main() {
 		}
 	}
 
-	// ... (Validate input file existence and readability)
+	if proxyFile != "" {
+		var err error
+		proxyList, err = readProxiesFromFile(proxyFile)
+		if err != nil {
+			log.Fatalf("Error reading proxies from file: %v", err)
+		}
+	}
+	rand.Seed(time.Now().UnixNano())
 
-	// If -d option is used, process the specific domain
 	if domain != "" {
 		processDomain(domain, customNucleiFlags, templateNames)
 		return
 	}
-
-	// Read the list of domains from the input file
 	domains, err := readDomainsFromFile(filePath)
 	if err != nil {
 		log.Fatalf("Error reading domains from file: %v", err)
 	}
-
-	// Process domains and perform fuzzing scans
 	processDomains(domains, parallelProcesses, customNucleiFlags, templateNames)
 }
 
-// ASCII art for the start
 func printASCIIArt() {
 	fmt.Println(`
                     .::::.                    
@@ -161,14 +184,12 @@ func printASCIIArt() {
 	`)
 }
 
-// Print short usage instructions
 func printShortUsage() {
 	fmt.Println("Usage: go run th3collect0r.go -f FILE_PATH [OPTIONS]")
 	fmt.Println("       go run th3collect0r.go -d DOMAIN")
 	fmt.Println("Use --help for a full list of available options.")
 }
 
-// Print full usage instructions
 func printFullUsage() {
 	fmt.Println("Usage: go run th3collect0r.go -f FILE_PATH [OPTIONS]")
 	fmt.Println("       go run th3collect0r.go -d DOMAIN")
@@ -178,12 +199,10 @@ func printFullUsage() {
 	fmt.Println("  -s             Silence mode. Run the script in the background.")
 	fmt.Println("  -p PARALLEL    Number of processes to run in parallel using GNU Parallel. Default: 4.")
 	fmt.Println("  -nf FLAGS      Custom Nuclei flags to use for all scans.")
-	fmt.Println("  -t TEMPLATE   Specify the custom Nuclei template for the first scan. Default: /fuzzing-templates/lfi")
-	fmt.Println("  -t TEMPLATE   Specify the custom Nuclei template for the second scan. Default: /fuzzing-templates/xss/reflected-xss.yaml")
-	fmt.Println("  -t TEMPLATE   Specify the custom Nuclei template for the third scan. Default: /fuzzing-templates/sqli/error-based.yaml")
-	fmt.Println("  -t TEMPLATE   Specify the custom Nuclei template for the fourth scan. Default: /fuzzing-templates/redirect")
-	fmt.Println("  -t TEMPLATE   Specify the custom Nuclei template for the fifth scan. Default: /fuzzing-templates/ssrf")
+	fmt.Println("  -t TEMPLATE    Specify custom Nuclei template(s) for scans. Default: built-in templates.")
 	fmt.Println("  -tp TEMPLATES_PATH   Path to the custom Nuclei templates. Default: /fuzzing-templates/")
+	fmt.Println("  -proxy URL     Use a (single) proxy for HTTP and tool requests (supports http, https, socks4, socks5 etc.)")
+	fmt.Println("  -proxyfile FILE  File with a list of proxies (one per line, all types supported; random selection per request)")
 	fmt.Println("  -h, --help     Print this help message and exit.")
 	fmt.Println("")
 	fmt.Println("Single Target Testing:")
@@ -192,55 +211,6 @@ func printFullUsage() {
 	fmt.Println("Note: Make sure you have proper authorization to perform security scans on the provided domains.")
 }
 
-// Find IP Func
-func findRealIPAddress(domain string) error {
-	ips, err := net.LookupHost(domain)
-	if err != nil {
-		return err
-	}
-
-	realIPAddress := ips[0] // Take the first IP address
-	outputFile := fmt.Sprintf("Results/%s_real_ip.txt", sanitizeFileName(domain))
-
-	err = os.WriteFile(outputFile, []byte(realIPAddress), 0644)
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("Success: Real IP address for %s is %s\n", domain, realIPAddress)
-	return nil
-}
-
-// SHODAN Func
-func requestShodanData(ipAddress string) error {
-	apiUrl := fmt.Sprintf("https://internetdb.shodan.io/%s", ipAddress)
-
-	response, err := http.Get(apiUrl)
-	if err != nil {
-		return err
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP request to Shodan API failed with status code: %d", response.StatusCode)
-	}
-
-	data, err := ioutil.ReadAll(response.Body)
-	if err != nil {
-		return err
-	}
-
-	outputFile := "shodan_results.txt"
-	err = os.WriteFile(outputFile, data, 0644)
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("Success: Shodan data for IP %s saved to %s\n", ipAddress, outputFile)
-	return nil
-}
-
-// Parseint func
 func parseInt(s string, defaultValue int) int {
 	value := defaultValue
 	n, err := fmt.Sscanf(s, "%d", &value)
@@ -271,32 +241,49 @@ func readDomainsFromFile(filePath string) ([]string, error) {
 	return domains, nil
 }
 
+func readProxiesFromFile(filePath string) ([]string, error) {
+	var proxies []string
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		proxy := strings.TrimSpace(scanner.Text())
+		if proxy != "" {
+			proxies = append(proxies, proxy)
+		}
+	}
+	return proxies, scanner.Err()
+}
+
+func pickProxy() string {
+	// If a proxy list is set, pick randomly from it
+	if len(proxyList) > 0 {
+		return proxyList[rand.Intn(len(proxyList))]
+	}
+	return proxyURL
+}
+
 func processDomains(domains []string, parallelProcesses int, customNucleiFlags string, templateNames []string) {
 	var wg sync.WaitGroup
-	semaphore := make(chan struct{}, parallelProcesses) // Allow up to 'parallelProcesses' goroutines in parallel
-
-	// Iterate through domains in batches
+	semaphore := make(chan struct{}, parallelProcesses)
 	for i := 0; i < len(domains); i += parallelProcesses {
-		// Determine the number of domains to process in this batch
 		batchSize := min(parallelProcesses, len(domains)-i)
-
-		// Launch goroutines for this batch
 		for j := 0; j < batchSize; j++ {
 			domain := domains[i+j]
-			semaphore <- struct{}{} // Acquire a slot in the semaphore
+			semaphore <- struct{}{}
 			wg.Add(1)
 			go func(domain string) {
 				defer wg.Done()
-				defer func() { <-semaphore }() // Release a slot in the semaphore
+				defer func() { <-semaphore }()
 				processDomain(domain, customNucleiFlags, templateNames)
 			}(domain)
 		}
-
-		// Wait for the batch to complete before moving to the next
 		wg.Wait()
 	}
-
-	close(semaphore) // Close the semaphore channel
+	close(semaphore)
 }
 
 func min(a, b int) int {
@@ -308,19 +295,13 @@ func min(a, b int) int {
 
 func processDomain(domain, customNucleiFlags string, templateNames []string) {
 	fmt.Printf("Processing %s...\n", domain)
-
-	// Extract domain name from the URL
 	domainName := strings.TrimPrefix(domain, "http://")
 	domainName = strings.TrimPrefix(domainName, "https://")
-	// Create Result dir
-	err := os.Mkdir("Results", 0750)
-	if err != nil && !os.IsExist(err) {
-		log.Fatalf("Error creating Results directory: %v", err)
-		log.Fatal(err)
 
+	if err := os.MkdirAll("Results", 0750); err != nil {
+		log.Fatalf("Error creating Results directory: %v", err)
 	}
-	defer os.Exit(0)
-	// Create a temporary directory
+
 	tempDir, err := os.MkdirTemp("", "scan-temp-")
 	if err != nil {
 		log.Printf("Error creating temporary directory: %v", err)
@@ -328,159 +309,75 @@ func processDomain(domain, customNucleiFlags string, templateNames []string) {
 	}
 	defer os.RemoveAll(tempDir)
 
-	// Declare and initialize the 'urls' map
 	urls := make(map[string]bool)
+	urlCollectWg := &sync.WaitGroup{}
+	collectFuncs := []struct {
+		name string
+		fn   func(string, string) ([]byte, error)
+	}{
+		{"waybackurls", runWaybackurls},
+		{"gau", runGau},
+		{"katana", runKatana},
+		{"hakrawler", runHakrawler},
+	}
 
-	var wg sync.WaitGroup
-
-	// Run waybackurls
-	wg.Add(1)
+	urlsChan := make(chan string, 1000)
+	for _, tool := range collectFuncs {
+		urlCollectWg.Add(1)
+		go func(toolName string, toolFn func(string, string) ([]byte, error)) {
+			defer urlCollectWg.Done()
+			output, err := toolFn(domainName, tempDir)
+			if err != nil {
+				log.Printf("Error running %s for %s: %v", toolName, domainName, err)
+				return
+			}
+			scanner := bufio.NewScanner(bytes.NewReader(output))
+			for scanner.Scan() {
+				url := scanner.Text()
+				if !strings.Contains(url, "://") {
+					url = "https://" + url
+				}
+				urlsChan <- url
+			}
+		}(tool.name, tool.fn)
+	}
 	go func() {
-		defer wg.Done()
-		waybackFilePath := filepath.Join(tempDir, "wayback.txt")
-		waybackCmd := exec.Command("waybackurls", domainName)
-		waybackOutput, err := waybackCmd.Output()
-		if err != nil {
-			log.Printf("Error running waybackurls for %s: %v", domainName, err)
-			return
-		}
-		err = os.WriteFile(waybackFilePath, waybackOutput, 0644)
-		if err != nil {
-			log.Printf("Error writing wayback output file: %v", err)
-			return
-		}
-		fmt.Printf("Success: waybackurls output written to %s\n", waybackFilePath)
-		addURLsFromFile(waybackFilePath, urls)
+		urlCollectWg.Wait()
+		close(urlsChan)
 	}()
+	for url := range urlsChan {
+		urls[url] = true
+	}
 
-	// Run gau
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		gauFilePath := filepath.Join(tempDir, "gau.txt")
-		gauCmd := exec.Command("gau", domainName)
-		gauOutput, err := gauCmd.Output()
-		if err != nil {
-			log.Printf("Error running gau for %s: %v", domainName, err)
-			return
-		}
-		err = os.WriteFile(gauFilePath, gauOutput, 0644)
-		if err != nil {
-			log.Printf("Error writing gau output file: %v", err)
-			return
-		}
-		fmt.Printf("Success: gau output written to %s\n", gauFilePath)
-		addURLsFromFile(gauFilePath, urls)
-	}()
-
-	// Run katana
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		katanaFilePath := filepath.Join(tempDir, "katana.txt")
-		katanaCmd := exec.Command("katana", "-u", domain, "-d", "6", "-jc")
-		var stdout, stderr bytes.Buffer
-		katanaCmd.Stdout = &stdout
-		katanaCmd.Stderr = &stderr
-
-		if err := katanaCmd.Run(); err != nil {
-			log.Printf("Error running katana for %s: %v\nStderr: %s", domainName, err, stderr.String())
-			return
-		}
-
-		katanaOutput := stdout.Bytes()
-		err := os.WriteFile(katanaFilePath, katanaOutput, 0644)
-		if err != nil {
-			log.Printf("Error writing katana output file: %v", err)
-			return
-		}
-		fmt.Printf("Success: katana output written to %s\n", katanaFilePath)
-		addURLsFromFile(katanaFilePath, urls)
-	}()
-
-	// Run hakrawler
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		hakrawlerFilePath := filepath.Join(tempDir, "hakrawler.txt")
-		hakrawlerCmd := exec.Command("hakrawler")
-		hakrawlerCmd.Stdin = strings.NewReader(domain)
-		hakrawlerOutput, err := hakrawlerCmd.Output()
-		if err != nil {
-			log.Printf("Error running hakrawler for %s: %v", domainName, err)
-			return
-		}
-		err = os.WriteFile(hakrawlerFilePath, hakrawlerOutput, 0644)
-		if err != nil {
-			log.Printf("Error writing hakrawler output file: %v", err)
-			return
-		}
-		fmt.Printf("Success: hakrawler output written to %s\n", hakrawlerFilePath)
-		addURLsFromFile(hakrawlerFilePath, urls)
-	}()
-
-	// Wait for all tasks to complete
-	wg.Wait()
-
-	// Perform fuzzing scans
 	urlsFile := filepath.Join(tempDir, "urls.txt")
-	fuzzingFile, err := os.Create(urlsFile)
-	if err != nil {
-		log.Printf("Error creating URLs file: %v", err)
+	if err := saveURLsToFile(urlsFile, urls); err != nil {
+		log.Printf("Error saving URLs: %v", err)
 		return
 	}
-	for url := range urls {
-		_, _ = fuzzingFile.WriteString(url + "\n")
-	}
-	_ = fuzzingFile.Close()
 
-	// Declare and initialize the WaitGroup for Nuclei scans
-	var wgNuclei sync.WaitGroup
-	semaphoreNuclei := make(chan struct{}, len(templateNames))
-
-	var wgHTML sync.WaitGroup
-	semaphoreHTML := make(chan struct{}, len(templateNames))
-
+	var scanWg sync.WaitGroup
 	for _, templatePath := range templateNames {
-		semaphoreNuclei <- struct{}{}
-		wgNuclei.Add(1)
-
-		go func(templatePath string) {
-			defer wgNuclei.Done()
-			defer func() { <-semaphoreNuclei }()
-			if err := performNucleiScan(urlsFile, templatePath, domain); err != nil {
-				log.Printf("Error performing Nuclei scan for %s with template %s: %v", domainName, templatePath, err)
-			} else {
-				fmt.Printf("Success: Nuclei scan completed for %s with template %s\n", domainName, templatePath)
+		scanWg.Add(1)
+		go func(tp string) {
+			defer scanWg.Done()
+			if err := performNucleiScan(urlsFile, tp, domain); err != nil {
+				log.Printf("Error performing Nuclei scan for %s with template %s: %v", domainName, tp, err)
+				return
 			}
-		}(templatePath)
-		semaphoreHTML <- struct{}{}
-		wgHTML.Add(1)
-
-		go func(templatePath string) {
-			defer wgHTML.Done()
-			defer func() { <-semaphoreNuclei }()
-			if err := generateHTMLReport(domain, strings.Fields(templatePath)); err != nil {
-				log.Printf("Error Generate HTML for %s with template %s: %v", domainName, templatePath, err)
-			} else {
-				fmt.Printf("Success: HTML  completed for %s with template %s\n", domainName, templatePath)
-			}
+			fmt.Printf("Success: Nuclei scan completed for %s with template %s\n", domainName, tp)
 		}(templatePath)
 	}
+	scanWg.Wait()
 
-	wgNuclei.Wait()
-	wgHTML.Wait()
-
-	// Generate HTML report using Nuclei results
 	if err := generateHTMLReport(domain, templateNames); err != nil {
-		log.Printf("Error generating HTML report for %s: %v", domain, err)
+		log.Printf("Error generating HTML report for %s: %v", domainName, err)
+	} else {
+		fmt.Printf("Success: HTML report generated for %s\n", domainName)
 	}
-	// Find real IP address and save it to a file
+
 	if err := findRealIPAddress(domain); err != nil {
 		log.Printf("Error finding real IP address: %v", err)
 	}
-
-	// Request Shodan data for the real IP address
 	realIPFile := fmt.Sprintf("Results/%s_real_ip.txt", sanitizeFileName(domain))
 	realIP, err := os.ReadFile(realIPFile)
 	if err != nil {
@@ -494,54 +391,137 @@ func processDomain(domain, customNucleiFlags string, templateNames []string) {
 	fmt.Printf("Done processing %s\n", domainName)
 }
 
-// Nuclei function
+// ---- Proxy-aware tool runners and HTTP ----
+
+func setCmdProxyEnv(cmd *exec.Cmd) {
+	proxy := pickProxy()
+	if proxy == "" {
+		return
+	}
+	// HTTP_PROXY and HTTPS_PROXY are respected by most CLI tools, SOCKS proxies by some (e.g. with ALL_PROXY)
+	cmd.Env = append(os.Environ(),
+		"HTTP_PROXY="+proxy, "HTTPS_PROXY="+proxy, "ALL_PROXY="+proxy,
+	)
+}
+
+func runWaybackurls(domain, tempDir string) ([]byte, error) {
+	cmd := exec.Command("waybackurls", domain)
+	setCmdProxyEnv(cmd)
+	return cmd.Output()
+}
+
+func runGau(domain, tempDir string) ([]byte, error) {
+	cmd := exec.Command("gau", domain)
+	setCmdProxyEnv(cmd)
+	return cmd.Output()
+}
+
+func runKatana(domain, tempDir string) ([]byte, error) {
+	cmd := exec.Command("katana", "-u", domain)
+	setCmdProxyEnv(cmd)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return stdout.Bytes(), err
+}
+
+func runHakrawler(domain, tempDir string) ([]byte, error) {
+	cmd := exec.Command("hakrawler")
+	setCmdProxyEnv(cmd)
+	cmd.Stdin = strings.NewReader(domain)
+	return cmd.Output()
+}
+
+func saveURLsToFile(filePath string, urls map[string]bool) error {
+	file, err := os.Create(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	for url := range urls {
+		_, err := file.WriteString(url + "\n")
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Nuclei function with proxy support
 func performNucleiScan(urlsFile, templatePath, domain string) error {
 	templateName := filepath.Base(templatePath)
 	outputFile := fmt.Sprintf("Results/%s_%s_output.txt", sanitizeFileName(domain), templateName)
-
-	nucleiCmd := exec.Command("sh", "-c", fmt.Sprintf("nuclei -l %s -t %s -o %s", urlsFile, templatePath, outputFile))
+	proxy := pickProxy()
+	var nucleiCmd *exec.Cmd
+	if proxy != "" {
+		// Try to detect the proxy type and build the command accordingly.
+		if strings.HasPrefix(proxy, "socks5") || strings.HasPrefix(proxy, "socks4") {
+			nucleiCmd = exec.Command("sh", "-c",
+				fmt.Sprintf("ALL_PROXY=%s nuclei -l %s -t %s -o %s", proxy, urlsFile, templatePath, outputFile))
+		} else {
+			nucleiCmd = exec.Command("sh", "-c",
+				fmt.Sprintf("HTTP_PROXY=%s HTTPS_PROXY=%s nuclei -l %s -t %s -o %s", proxy, proxy, urlsFile, templatePath, outputFile))
+		}
+	} else {
+		nucleiCmd = exec.Command("sh", "-c",
+			fmt.Sprintf("nuclei -l %s -t %s -o %s", urlsFile, templatePath, outputFile))
+	}
 	nucleiCmd.Stdout = os.Stdout
 	nucleiCmd.Stderr = os.Stderr
+	return nucleiCmd.Run()
+}
 
-	if err := nucleiCmd.Run(); err != nil {
+// Proxy-aware HTTP for Shodan
+func requestShodanData(ipAddress string) error {
+	apiUrl := fmt.Sprintf("https://internetdb.shodan.io/%s", ipAddress)
+	client := &http.Client{}
+	proxy := pickProxy()
+	if proxy != "" {
+		proxyParsed, err := url.Parse(proxy)
+		if err == nil {
+			client.Transport = &http.Transport{Proxy: http.ProxyURL(proxyParsed)}
+		}
+	}
+	response, err := client.Get(apiUrl)
+	if err != nil {
 		return err
 	}
-
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP request to Shodan API failed with status code: %d", response.StatusCode)
+	}
+	data, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		return err
+	}
+	outputFile := "shodan_results.txt"
+	err = os.WriteFile(outputFile, data, 0644)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Success: Shodan data for IP %s saved to %s\n", ipAddress, outputFile)
 	return nil
 }
-func addURLsFromFile(filePath string, urls map[string]bool) {
-	// Open the file and create a scanner.
-	file, err := os.Open(filePath)
+
+// DNS lookup (no proxy, direct)
+func findRealIPAddress(domain string) error {
+	ips, err := net.LookupHost(domain)
 	if err != nil {
-		log.Printf("Error opening file: %v", err)
-		return
+		return err
 	}
-	defer file.Close()
-	scanner := bufio.NewScanner(file)
-
-	// Iterate over the lines in the file.
-	for scanner.Scan() {
-		// Get the URL from the current line.
-		url := scanner.Text()
-
-		// Check if the URL contains a protocol.
-		if !strings.Contains(url, "://") {
-			// If not, prepend the `https://` protocol.
-			url = "https://" + url
-		}
-
-		// Add the URL to the map.
-		urls[url] = true
+	realIPAddress := ips[0]
+	outputFile := fmt.Sprintf("Results/%s_real_ip.txt", sanitizeFileName(domain))
+	err = os.WriteFile(outputFile, []byte(realIPAddress), 0644)
+	if err != nil {
+		return err
 	}
-
-	// Check for errors reading the file.
-	if err := scanner.Err(); err != nil {
-		log.Printf("Error reading file: %v", err)
-		return
-	}
+	fmt.Printf("Success: Real IP address for %s is %s\n", domain, realIPAddress)
+	return nil
 }
 
-// Generate HTML Function
+// ---- Utilities and HTML ----
+
 func generateHTMLReport(domain string, templateNames []string) error {
 	reportFileName := fmt.Sprintf("%s.html", sanitizeFileName(domain))
 	reportFile, err := os.Create(reportFileName)
@@ -556,11 +536,9 @@ func generateHTMLReport(domain string, templateNames []string) error {
 <head>
   <title>Security Scan Report for %s</title>
   <style>
-    /* Add your custom CSS styles here */
     %s
   </style>
   <script>
-    // Add your custom JavaScript here
     %s
   </script>
 </head>
@@ -571,40 +549,25 @@ func generateHTMLReport(domain string, templateNames []string) error {
 </body>
 </html>
 `
-
-	// Load CSS and JavaScript files
-	cssContent, err := loadFileContents("styles.css") // Load your custom CSS file
-	if err != nil {
-		return err
-	}
-	jsContent, err := loadFileContents("script.js") // Load your custom JavaScript file
-	if err != nil {
-		return err
-	}
-
+	cssContent, _ := loadFileContents("styles.css")
+	jsContent, _ := loadFileContents("script.js")
 	var sections []string
 	for i, templatePath := range templateNames {
 		sectionID := fmt.Sprintf("template%d", i+1)
 		sectionTitle := fmt.Sprintf("Template %d Results:", i+1)
-
 		outputFilePath := fmt.Sprintf("Results/%s_%s_output.txt", sanitizeFileName(domain), templatePath)
 		output, err := readOutputFile(outputFilePath)
 		if err != nil {
-			return err
+			output = fmt.Sprintf("Error reading output: %v", err)
 		}
-
-		// Escape HTML characters in the output
 		escapedOutput := html.EscapeString(output)
-
 		sections = append(sections, fmt.Sprintf(`<h2 id="%s">%s</h2><pre>%s</pre>`, sectionID, sectionTitle, escapedOutput))
 	}
-
 	reportContent := fmt.Sprintf(reportTemplate, domain, cssContent, jsContent, domain, strings.Join(sections, "\n"))
 	_, err = reportFile.WriteString(reportContent)
 	if err != nil {
 		return err
 	}
-
 	fmt.Printf("HTML report generated: %s\n", reportFileName)
 	return nil
 }
